@@ -1,4 +1,7 @@
 #include "systemcalls.h"
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -62,7 +65,7 @@ bool do_exec(int count, ...)
         exit(1);
     }
     else {
-        wait(NULL);
+        waitpid(pid, NULL, 0);
     }
 
 /*
