@@ -17,7 +17,13 @@ bool do_system(const char *cmd)
  *   or false() if it returned a failure
 */
 
-    return true;
+    int result = system(cmd);
+
+    if (result == 0) {
+        return true;
+    }
+
+    return false;
 }
 
 /**
@@ -45,9 +51,19 @@ bool do_exec(int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
+
+    pid_t pid = fork();
+    if (pid == -1) {
+        return false;
+    }
+
+    if (pid == 0) {
+        execv(command[0], command);
+        exit(1);
+    }
+    else {
+        wait(NULL);
+    }
 
 /*
  * TODO:
