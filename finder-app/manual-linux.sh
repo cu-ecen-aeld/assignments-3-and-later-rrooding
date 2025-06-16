@@ -96,7 +96,7 @@ sudo mknod -m 666 ${OUTDIR}/rootfs/dev/null c 1 3
 
 # TODO: Clean and build the writer utility
 make clean
-make ARCH=${ARCH64} CROSS_COMPILE=${CROSS_COMPILE}
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
 
 # TODO: Copy the finder related scripts and executables to the /home directory
 # on the target rootfs
