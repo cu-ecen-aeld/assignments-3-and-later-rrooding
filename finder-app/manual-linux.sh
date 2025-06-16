@@ -103,9 +103,15 @@ make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
 # on the target rootfs
 cp ${FINDER_APP_DIR}/writer ${OUTDIR}/rootfs/home
 cp ${FINDER_APP_DIR}/finder.sh ${OUTDIR}/rootfs/home
-cp -R ${FINDER_APP_DIR}/conf ${OUTDIR}/rootfs/home
+cp ${FINDER_APP_DIR}/conf/username.txt ${OUTDIR}/rootfs/home/
+cp ${FINDER_APP_DIR}/conf/assignment.txt ${OUTDIR}/rootfs/home/
 cp ${FINDER_APP_DIR}/finder-test.sh ${OUTDIR}/rootfs/home
 cp ${FINDER_APP_DIR}/autorun-qemu.sh ${OUTDIR}/rootfs/home
+
+sed -i 's|\.\./conf/assignment.txt|assignment.txt|' ${OUTDIR}/rootfs/home/finder-test.sh
+sed -i 's|conf/username.txt|username.txt|' ${OUTDIR}/rootfs/home/finder-test.sh
+sed -i 's|#!/bin/bash|#!/bin/sh|' ${OUTDIR}/rootfs/home/finder.sh
+
 
 
 # TODO: Chown the root directory
