@@ -84,7 +84,7 @@ ${CROSS_COMPILE}readelf -a "${OUTDIR}/rootfs/bin/busybox" | grep "program interp
 ${CROSS_COMPILE}readelf -a "${OUTDIR}/rootfs/bin/busybox" | grep "Shared library"
 
 # TODO: Add library dependencies to rootfs
-SYSROOT=/usr/aarch64-linux-gnu/
+SYSROOT=/usr/aarch64-none-linux-gnu
 cp -L ${SYSROOT}/lib/ld-linux-aarch64.so.1 ${OUTDIR}/rootfs/lib/
 cp -L ${SYSROOT}/lib/libc.so.6 ${OUTDIR}/rootfs/lib64/
 cp -L ${SYSROOT}/lib/libm.so.6 ${OUTDIR}/rootfs/lib64/
