@@ -103,7 +103,7 @@ make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
 # on the target rootfs
 cp ${FINDER_APP_DIR}/writer ${OUTDIR}/rootfs/home
 cp ${FINDER_APP_DIR}/finder.sh ${OUTDIR}/rootfs/home
-cp ${FINDER_APP_DIR}/conf/*.txt ${OUTDIR}/rootfs/home
+cp -R ${FINDER_APP_DIR}/conf ${OUTDIR}/rootfs/home
 cp ${FINDER_APP_DIR}/finder-test.sh ${OUTDIR}/rootfs/home
 cp ${FINDER_APP_DIR}/autorun-qemu.sh ${OUTDIR}/rootfs/home
 
