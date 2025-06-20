@@ -109,7 +109,7 @@ int setup_server(int daemon_mode) {
     }
 
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
 
@@ -239,7 +239,7 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        // d. Logs message to the syslog “Accepted connection from xxx” where XXXX is the IP address of the connected client. 
+        // d. Logs message to the syslog "Accepted connection from xxx" where XXXX is the IP address of the connected client. 
         char *client_ip = inet_ntoa(((struct sockaddr_in *)&client_addr)->sin_addr);
         printf("Accepted connection from %s\n", client_ip);
         syslog(LOG_INFO, "Accepted connection from %s", client_ip);
