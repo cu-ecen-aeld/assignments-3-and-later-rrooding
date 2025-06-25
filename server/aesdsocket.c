@@ -13,6 +13,7 @@
 #include <signal.h>
 #include <syslog.h>
 #include <pthread.h>
+#include <time.h>
 
 #define PORT "9000"
 #define BACKLOG 10
@@ -226,6 +227,23 @@ int write_buffer_to_file(const char *buffer, size_t buffer_size) {
     return 0;
 }
 
+void *write_time_marker(void *arg) {
+    char timestamp[128];
+    struct timespec sleep_time = { .tv_sec = 10, .tv_nsec = 0 };
+
+    while (!shutdown_flag) {
+        time_t now = time(NULL);
+        struct tm *tm_info = localtime(&now);
+        strftime(timestamp, sizeof(timestamp), "timestamp:%a, %d %b %Y %H:%M:%S\n", tm_info);
+        if (write_buffer_to_file(timestamp, strlen(timestamp)) != 0) {
+            syslog(LOG_ERR, "failed to write timestmap to file");
+        }
+        while(nanosleep(&sleep_time, &sleep_time) < 0 && errno == EINTR && !shutdown_flag);
+    }
+
+    return NULL;
+}
+
 void *handle_connection(void *arg) {
     struct connection_data *data = (struct connection_data *)arg;
     int client_fd = data->client_fd;
@@ -319,6 +337,8 @@ int main(int argc, char **argv) {
     int daemon_mode = 0;
     int opt;
     struct thread_node *thread_list = NULL;
+    pthread_t timestamp_thread;
+
 
     // Parse command-line arguments
     while ((opt = getopt(argc, argv, "d")) != -1) {
@@ -341,6 +361,13 @@ int main(int argc, char **argv) {
     sigaddset(&sigmask, SIGTERM);
 
     int server_fd = setup_server(daemon_mode);
+
+    if (pthread_create(&timestamp_thread, NULL, write_time_marker, NULL) != 0) {
+        perror("pthread_create for timestamp thread failed");
+        closelog();
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
 
     // c. accept connections
     while (!shutdown_flag) {
@@ -415,6 +442,8 @@ int main(int argc, char **argv) {
         free(temp);
     }
     pthread_mutex_unlock(&thread_list_mutex);
+
+    pthread_join(timestamp_thread, NULL);
 
     if (server_fd >= 0) {
         close(server_fd);
