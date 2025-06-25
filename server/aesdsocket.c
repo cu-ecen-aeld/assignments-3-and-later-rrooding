@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <syslog.h>
+#include <pthread.h>
 
 #define PORT "9000"
 #define BACKLOG 10
@@ -19,6 +20,18 @@
 #define OUTPUT_FILE "/var/tmp/aesdsocketdata"
 
 volatile sig_atomic_t shutdown_flag = 0;
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t thread_list_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+struct connection_data {
+    int client_fd;
+    char client_ip[INET_ADDRSTRLEN];
+};
+
+struct thread_node {
+    pthread_t thread_id;
+    struct thread_node *next;
+};
 
 void signal_handler(int signum) {
     shutdown_flag = 1;
@@ -183,9 +196,129 @@ int send_file_contents(int client_fd) {
     return 0;
 }
 
+int write_buffer_to_file(const char *buffer, size_t buffer_size) {
+    pthread_mutex_lock(&file_mutex);
+
+    FILE *file = fopen(OUTPUT_FILE, "a+");
+    if (!file) {
+        perror("fopen failed");
+        pthread_mutex_unlock(&file_mutex);
+
+        return -1;
+    }
+
+    if (fwrite(buffer, 1, buffer_size, file) != buffer_size) {
+        perror("fwrite failed");
+        fclose(file);
+        pthread_mutex_unlock(&file_mutex);
+
+        return -1;
+    }
+
+    if (fclose(file) != 0) {
+        perror("fclose failed");
+        pthread_mutex_unlock(&file_mutex);
+
+        return -1;
+    }
+
+    pthread_mutex_unlock(&file_mutex);
+    return 0;
+}
+
+void *handle_connection(void *arg) {
+    struct connection_data *data = (struct connection_data *)arg;
+    int client_fd = data->client_fd;
+    char *client_ip = data->client_ip;
+    
+    printf("Accepted connection from %s\n", client_ip);
+    syslog(LOG_INFO, "Accepted connection from %s", client_ip);
+
+    size_t buffer_size = 0;
+    size_t buffer_capacity = 1024;
+    char *buffer = malloc(buffer_capacity);
+    if (!buffer) {
+        perror("malloc failed");
+        syslog(LOG_INFO, "Closed connection from %s", client_ip);
+        close(client_fd);
+        free(data);
+        return NULL;
+    }
+        
+    buffer[0] = '\0';
+
+    // receive data until newline
+    while (1) {
+        if (buffer_size + 1 >= buffer_capacity) {
+            buffer_capacity *= 2;
+            char *new_buffer = realloc(buffer, buffer_capacity);
+            if (!new_buffer) {
+                fprintf(stderr, "realloc failed: possible packet too large\n");
+                syslog(LOG_INFO, "Closed connection from %s", client_ip);
+                free(buffer);
+                close(client_fd);
+                free(data);
+                return NULL;
+            }
+
+            buffer = new_buffer;
+        }
+
+        ssize_t bytes_received = recv(client_fd, buffer + buffer_size, 1, 0);
+        if (bytes_received < 0) {
+            if (errno == EINTR) continue;
+            perror("recv failed");
+            syslog(LOG_INFO, "Closed connection from %s", client_ip);
+            free(buffer);
+            close(client_fd);
+            free(data);
+            return NULL;
+        }
+        if (bytes_received == 0) {
+            if (buffer_size > 0) {
+                buffer[buffer_size] = '\0';
+            }
+            free(buffer);
+            close(client_fd);
+            free(data);
+            return NULL;
+        }
+
+        buffer_size += bytes_received;
+        buffer[buffer_size] = '\0';
+
+        if (buffer[buffer_size - 1] == '\n') {
+            if (write_buffer_to_file(buffer, buffer_size) == -1) {
+                fprintf(stderr, "failed to write file contents\n");
+                syslog(LOG_INFO, "Closed connection from %s", client_ip);
+                free(buffer);
+                close(client_fd);
+                free(data);
+                return NULL;
+            }
+
+            // send back
+            if (send_file_contents(client_fd) == -1) {
+                fprintf(stderr, "failed to send file contents\n");
+                syslog(LOG_INFO, "Closed connection from %s", client_ip);
+                free(buffer);
+                close(client_fd);
+                free(data);
+                return NULL;
+            }
+
+            buffer_size = 0;
+            buffer[0] = '\0';
+        }
+    }
+
+    return NULL;
+}
+
 int main(int argc, char **argv) {
     int daemon_mode = 0;
     int opt;
+    struct thread_node *thread_list = NULL;
 
     // Parse command-line arguments
     while ((opt = getopt(argc, argv, "d")) != -1) {
@@ -208,10 +341,6 @@ int main(int argc, char **argv) {
     sigaddset(&sigmask, SIGTERM);
 
     int server_fd = setup_server(daemon_mode);
-
-    char *buffer = NULL;
-    size_t buffer_size = 0;
-    size_t buffer_capacity = 1024;
 
     // c. accept connections
     while (!shutdown_flag) {
@@ -240,111 +369,53 @@ int main(int argc, char **argv) {
         }
 
         // d. Logs message to the syslog "Accepted connection from xxx" where XXXX is the IP address of the connected client. 
-        char *client_ip = inet_ntoa(((struct sockaddr_in *)&client_addr)->sin_addr);
-        printf("Accepted connection from %s\n", client_ip);
-        syslog(LOG_INFO, "Accepted connection from %s", client_ip);
-
-        buffer = malloc(buffer_capacity);
-        if (!buffer) {
+        char client_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(((struct sockaddr_in *)&client_addr)->sin_addr), client_ip, INET_ADDRSTRLEN);
+  
+        struct connection_data *data = malloc(sizeof(struct connection_data));
+        if (!data) {
             perror("malloc failed");
-            syslog(LOG_INFO, "Closed connection from %s", client_ip);
+            close(client_fd);
+            continue;
+        }
+        data->client_fd = client_fd;
+        strcpy(data->client_ip, client_ip);
+
+        pthread_t thread_id;
+        if (pthread_create(&thread_id, NULL, handle_connection, data) != 0) {
+            perror("pthread_create failed");
+            free(data);
             close(client_fd);
             continue;
         }
 
-        buffer_size = 0;
-        buffer[0] = '\0';
-
-        // receive data until newline
-        while (1) {
-            if (buffer_size + 1 >= buffer_capacity) {
-                buffer_capacity *= 2;
-                char *new_buffer = realloc(buffer, buffer_capacity);
-                if (!new_buffer) {
-                    fprintf(stderr, "realloc failed: possible packet too large\n");
-                    syslog(LOG_INFO, "Closed connection from %s", client_ip);
-                    free(buffer);
-                    close(client_fd);
-                    break;
-                }
-
-                buffer = new_buffer;
-            }
-
-            ssize_t bytes_received = recv(client_fd, buffer + buffer_size, 1, 0);
-            if (bytes_received < 0) {
-                if (errno == EINTR) continue;
-                perror("recv failed");
-                syslog(LOG_INFO, "Closed connection from %s", client_ip);
-                free(buffer);
-                close(client_fd);
-                break;
-            }
-            if (bytes_received == 0) {
-                if (buffer_size > 0) {
-                    buffer[buffer_size] = '\0';
-                }
-                free(buffer);
-                close(client_fd);
-                break;
-            }
-
-            buffer_size += bytes_received;
-            buffer[buffer_size] = '\0';
-
-            if (buffer[buffer_size - 1] == '\n') {
-                FILE *file = fopen(OUTPUT_FILE, "a+");
-                if (!file) {
-                    perror("fopen failed");
-                    syslog(LOG_INFO, "Closed connection from %s", client_ip);
-                    free(buffer);
-                    close(client_fd);
-                    break;
-                }
-
-                if (fwrite(buffer, 1, buffer_size, file) != buffer_size) {
-                    perror("fwrite failed");
-                    syslog(LOG_INFO, "Closed connection from %s", client_ip);
-                    fclose(file);
-                    free(buffer);
-                    close(client_fd);
-                    break;
-                }
-
-                if (fclose(file) != 0) {
-                    perror("fclose failed");
-                    syslog(LOG_INFO, "Closed connection from %s", client_ip);
-                    free(buffer);
-                    close(client_fd);
-                    break;
-                }
-
-                // send back
-                if (send_file_contents(client_fd) == -1) {
-                    fprintf(stderr, "failed to send file contents\n");
-                    syslog(LOG_INFO, "Closed connection from %s", client_ip);
-                    free(buffer);
-                    close(client_fd);
-                    break;
-                }
-
-                buffer_size = 0;
-                buffer[0] = '\0';
-            }
+        pthread_mutex_lock(&thread_list_mutex);
+        struct thread_node *new_node = malloc(sizeof(struct thread_node));
+        if (new_node) {
+            new_node->thread_id = thread_id;
+            new_node->next = thread_list;
+            thread_list = new_node;
+        } else {
+            fprintf(stderr, "malloc failed for thread_node\n");
         }
-
-        if (shutdown_flag) {
-            break; // Exit accept loop after current client
-        }
+        pthread_mutex_unlock(&thread_list_mutex);
     }
 
     // Cleanup
     if (shutdown_flag) {
         syslog(LOG_INFO, "Caught signal, exiting");
     }
-    if (buffer) {
-        // free(buffer);
+
+    pthread_mutex_lock(&thread_list_mutex);
+    struct thread_node *current = thread_list;
+    while (current) {
+        pthread_join(current->thread_id, NULL);
+        struct thread_node *temp = current;
+        current = current->next;
+        free(temp);
     }
+    pthread_mutex_unlock(&thread_list_mutex);
+
     if (server_fd >= 0) {
         close(server_fd);
     }
