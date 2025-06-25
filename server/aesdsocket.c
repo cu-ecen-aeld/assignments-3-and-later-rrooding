@@ -229,7 +229,6 @@ int write_buffer_to_file(const char *buffer, size_t buffer_size) {
 
 void *write_time_marker(void *arg) {
     char timestamp[128];
-    struct timespec sleep_time = { .tv_sec = 10, .tv_nsec = 0 };
 
     while (!shutdown_flag) {
         time_t now = time(NULL);
@@ -238,7 +237,8 @@ void *write_time_marker(void *arg) {
         if (write_buffer_to_file(timestamp, strlen(timestamp)) != 0) {
             syslog(LOG_ERR, "failed to write timestmap to file");
         }
-        while(nanosleep(&sleep_time, &sleep_time) < 0 && errno == EINTR && !shutdown_flag);
+
+        for (int i = 0; i < 10 && !shutdown_flag; i++) sleep(1);
     }
 
     return NULL;
@@ -443,11 +443,13 @@ int main(int argc, char **argv) {
     }
     pthread_mutex_unlock(&thread_list_mutex);
 
-    pthread_join(timestamp_thread, NULL);
-
+    
     if (server_fd >= 0) {
         close(server_fd);
     }
+
+    pthread_join(timestamp_thread, NULL);
+
     if (unlink(OUTPUT_FILE) < 0 && errno != ENOENT) {
         perror("unlink failed");
     }
