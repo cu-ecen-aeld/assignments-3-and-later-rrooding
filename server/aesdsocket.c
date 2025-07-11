@@ -17,8 +17,17 @@
 
 #define PORT "9000"
 #define BACKLOG 10
-#define READ_BUFFER_SIZE 4096
+#define READ_BUFFER_SIZE 40961
+
+#ifndef USE_AESD_CHAR_DEVICE
+#define USE_AESD_CHAR_DEVICE 1
+#endif
+
+#if USE_AESD_CHAR_DEVICE
+#define OUTPUT_FILE "/dev/aesdchar"
+#else
 #define OUTPUT_FILE "/var/tmp/aesdsocketdata"
+#endif
 
 volatile sig_atomic_t shutdown_flag = 0;
 pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -227,6 +236,7 @@ int write_buffer_to_file(const char *buffer, size_t buffer_size) {
     return 0;
 }
 
+#if !USE_AESD_CHAR_DEVICE
 void *write_time_marker(void *arg) {
     char timestamp[128];
 
@@ -243,6 +253,7 @@ void *write_time_marker(void *arg) {
 
     return NULL;
 }
+#endif
 
 void *handle_connection(void *arg) {
     struct connection_data *data = (struct connection_data *)arg;
@@ -362,12 +373,14 @@ int main(int argc, char **argv) {
 
     int server_fd = setup_server(daemon_mode);
 
+    #if !USE_AESD_CHAR_DEVICE
     if (pthread_create(&timestamp_thread, NULL, write_time_marker, NULL) != 0) {
         perror("pthread_create for timestamp thread failed");
         closelog();
         close(server_fd);
         exit(EXIT_FAILURE);
     }
+    #endif
 
     // c. accept connections
     while (!shutdown_flag) {
@@ -448,11 +461,15 @@ int main(int argc, char **argv) {
         close(server_fd);
     }
 
+    #if !USE_AESD_CHAR_DEVICE
     pthread_join(timestamp_thread, NULL);
+    #endif
 
+    #if !USE_AESD_CHAR_DEVICE
     if (unlink(OUTPUT_FILE) < 0 && errno != ENOENT) {
         perror("unlink failed");
     }
+    #endif
     
     closelog();
 
