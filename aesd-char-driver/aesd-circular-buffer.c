@@ -29,31 +29,26 @@
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
             size_t char_offset, size_t *entry_offset_byte_rtn )
 {
-    size_t idx;
-    size_t count = 0;
-    size_t total = 0;
-    size_t entries = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-    bool is_full = buffer->full;
+    size_t total_offset = 0;
+    size_t entry_idx;
+    size_t entry_count = buffer->full ? AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED :
+                        (buffer->in_offs >= buffer->out_offs) ? buffer->in_offs - buffer->out_offs :
+                        AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - buffer->out_offs + buffer->in_offs;
 
-    if (is_full) {
-        count = entries;
-    } else if (buffer->in_offs >= buffer->out_offs) {
-        count = buffer->in_offs - buffer->out_offs;
-    } else {
-        count = entries + buffer->in_offs - buffer->out_offs;
-    }
+    for (size_t i = 0; i < entry_count; i++) {
+        // Calculate the circular index
+        entry_idx = (buffer->out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+        size_t entry_size = buffer->entry[entry_idx].size;
 
-    idx = buffer->out_offs;
-    for (size_t i = 0; i < count; i++) {
-        struct aesd_buffer_entry *entry = &buffer->entry[idx];
-        if (char_offset < total + entry->size) {
-            *entry_offset_byte_rtn = char_offset - total;
-            return entry;
+        if (char_offset < (total_offset + entry_size)) {
+            *entry_offset_byte_rtn = char_offset - total_offset;
+            return &buffer->entry[entry_idx];
         }
-        total += entry->size;
-        idx = (idx + 1) % entries;
+
+        total_offset += entry_size;
     }
-    return NULL;
+
+    return NULL; 
 }
 
 /**
@@ -65,22 +60,26 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 */
 const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
-    const char *replaced = buffer->full ? buffer->entry[buffer->out_offs].buffptr : NULL;
+    const char *old_buffptr = NULL;
 
-    buffer->entry[buffer->in_offs] = *add_entry;
-
+    // If full, we are overwriting the oldest entry
     if (buffer->full) {
+        old_buffptr = buffer->entry[buffer->out_offs].buffptr; // Save pointer to free it later
         buffer->out_offs = (buffer->out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
 
+    // Write new entry at in_offs
+    buffer->entry[buffer->in_offs] = *add_entry;
+
+    // Move in_offs to the next location
     buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
 
-    if (buffer->in_offs == buffer->out_offs) {
-        buffer->full = true;
-    }
+    // Set full flag if in and out are the same
+    buffer->full = (buffer->in_offs == buffer->out_offs);
 
-    return replaced;
+    return old_buffptr;
 }
+
 
 /**
 * Initializes the circular buffer described by @param buffer to an empty struct
