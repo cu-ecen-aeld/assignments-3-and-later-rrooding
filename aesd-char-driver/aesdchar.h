@@ -28,9 +28,10 @@
 struct aesd_dev
 {
     struct cdev cdev;     /* Char device structure      */
-    struct aesd_circular_buffer history;
-    struct aesd_buffer_entry buffer;  
-    struct mutex lock;  
+    struct aesd_circular_buffer buffer;
+    struct mutex lock;
+    char *partial;
+    size_t partial_size;
 };
 
 
