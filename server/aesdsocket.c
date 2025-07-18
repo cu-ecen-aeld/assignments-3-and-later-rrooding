@@ -25,6 +25,7 @@
 
 #if USE_AESD_CHAR_DEVICE
 #define OUTPUT_FILE "/dev/aesdchar"
+#include "../aesd-char-driver/aesd_ioctl.h"
 #else
 #define OUTPUT_FILE "/var/tmp/aesdsocketdata"
 #endif
@@ -317,6 +318,58 @@ void *handle_connection(void *arg) {
         buffer[buffer_size] = '\0';
 
         if (buffer[buffer_size - 1] == '\n') {
+#if USE_AESD_CHAR_DEVICE
+            // Check for AESDCHAR_IOCSEEKTO:X,Y\n pattern
+            unsigned int x, y;
+            if (sscanf(buffer, "AESDCHAR_IOCSEEKTO:%u,%u", &x, &y) == 2) {
+                pthread_mutex_lock(&file_mutex);
+
+                int dev = open(OUTPUT_FILE, O_RDWR);
+                if (!dev) {
+                    perror("open failed");
+                    pthread_mutex_unlock(&file_mutex);
+
+                    continue;
+                }
+
+                struct aesd_seekto seekto;
+                seekto.write_cmd = x;
+                seekto.write_cmd_offset = y;
+                if (ioctl(dev, AESDCHAR_IOCSEEKTO, &seekto) == -1) {
+                    perror("ioctl AESDCHAR_IOCSEEKTO failed");
+                }
+                // After ioctl, send file contents from current offset
+                char readbuf[READ_BUFFER_SIZE];
+                ssize_t nread;
+                lseek(dev, 0, SEEK_CUR); // ensure offset is honored
+                while ((nread = read(dev, readbuf, READ_BUFFER_SIZE)) > 0) {
+                    ssize_t sent = 0;
+                    while (sent < nread) {
+                        ssize_t n = send(client_fd, readbuf + sent, nread - sent, 0);
+                        if (n < 0) {
+                            if (errno == EINTR) continue;
+                            pthread_mutex_unlock(&file_mutex);
+                            close(dev);
+                            perror("send failed");
+                            break;
+                        }
+                        sent += n;
+                    }
+                }
+                buffer_size = 0;
+                buffer[0] = '\0';
+
+                if (close(dev) != 0) {
+                    perror("close failed");
+                    pthread_mutex_unlock(&file_mutex);
+                    continue;
+                }
+
+                pthread_mutex_unlock(&file_mutex);
+
+                continue;
+            }
+#else
             if (write_buffer_to_file(buffer, buffer_size) == -1) {
                 fprintf(stderr, "failed to write file contents\n");
                 syslog(LOG_INFO, "Closed connection from %s", client_ip);
@@ -338,6 +391,7 @@ void *handle_connection(void *arg) {
 
             buffer_size = 0;
             buffer[0] = '\0';
+#endif
         }
     }
 
@@ -348,8 +402,6 @@ int main(int argc, char **argv) {
     int daemon_mode = 0;
     int opt;
     struct thread_node *thread_list = NULL;
-    pthread_t timestamp_thread;
-
 
     // Parse command-line arguments
     while ((opt = getopt(argc, argv, "d")) != -1) {
@@ -374,6 +426,7 @@ int main(int argc, char **argv) {
     int server_fd = setup_server(daemon_mode);
 
     #if !USE_AESD_CHAR_DEVICE
+    pthread_t timestamp_thread;
     if (pthread_create(&timestamp_thread, NULL, write_time_marker, NULL) != 0) {
         perror("pthread_create for timestamp thread failed");
         closelog();
